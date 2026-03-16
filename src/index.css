@@ -1,0 +1,104 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@theme {
+  --color-primary: #6366f1;
+  --color-secondary: #a855f7;
+  --color-bg-dark: #0f172a;
+  --color-text-primary: #f8fafc;
+  --color-text-secondary: #94a3b8;
+  
+  --background-image-gradient-radial: radial-gradient(var(--tw-gradient-stops));
+}
+
+@layer base {
+  :root {
+    --text: #6b6375;
+    --text-h: #08060d;
+    --bg: #fff;
+    --border: #e5e4e7;
+    --code-bg: #f4f3ec;
+    --accent: #aa3bff;
+    --accent-bg: rgba(170, 59, 255, 0.1);
+    --accent-border: rgba(170, 59, 255, 0.5);
+    --social-bg: rgba(244, 243, 236, 0.5);
+    --glass-bg: rgba(255, 255, 255, 0.05);
+    --glass-border: rgba(255, 255, 255, 0.1);
+  }
+
+  body {
+    @apply bg-bg-dark text-text-primary antialiased;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+}
+
+@layer components {
+  .glass {
+    @apply bg-white/5 backdrop-blur-xl border border-white/10 shadow-2xl;
+  }
+
+  .glass-card {
+    @apply bg-white/[0.03] backdrop-blur-md border border-white/10 hover:border-white/20 transition-all duration-300;
+  }
+
+  .btn-premium {
+    @apply relative flex items-center gap-2 px-6 py-3 rounded-xl font-bold text-white 
+           bg-gradient-to-r from-[--color-primary] to-[--color-secondary]
+           hover:scale-105 active:scale-95 transition-all duration-300
+           shadow-lg shadow-indigo-500/25 hover:shadow-indigo-500/40
+           overflow-hidden;
+  }
+
+  .btn-premium::before {
+    content: '';
+    @apply absolute inset-0 bg-white/20 -translate-x-full skew-x-12 group-hover:animate-[shine_0.6s_ease-out];
+  }
+
+  .container {
+    @apply max-w-7xl mx-auto px-6;
+  }
+
+  .epub-html, .epub-body {
+    display: block;
+    width: 100%;
+  }
+
+  .prose img, .epub-content img {
+    display: block !important;
+    max-width: 100% !important;
+    max-height: 500px;
+    width: auto;
+    height: auto;
+    margin: 2rem auto;
+    border-radius: 0.5rem;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+  }
+
+  /* SVG image 요소도 보이도록 */
+  .prose image, .epub-content image {
+    display: block !important;
+  }
+
+  .structure-preserved-text {
+    font-family: 'Inter', sans-serif;
+    line-height: 1.8;
+  }
+
+  /* 텍스트 모드의 제목 강조 스타일 */
+  .structure-preserved-text h3, 
+  .structure-preserved-text .header-text {
+    color: var(--primary);
+    font-weight: 800;
+    font-size: 1.1rem;
+    margin-top: 2rem;
+    display: block;
+    border-left: 4px solid var(--primary);
+    padding-left: 1rem;
+  }
+}
+
+@keyframes shine {
+  100% {
+    transform: translateX(200%) skewX(12deg);
+  }
+}
