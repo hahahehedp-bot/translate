@@ -75,13 +75,13 @@ export const parseEpub = async (file: File): Promise<DocStructure> => {
       }
 
       // TOC를 평탄화하여 검색하기 쉽게 만듦
-      const flatToc: { title: string; href: string }[] = [];
-      const flattenToc = (items: any[]) => {
+      const flatToc: { title: string; href: string; level: number; originalHref: string }[] = [];
+      const flattenToc = (items: any[], level: number = 0) => {
         for (const item of items) {
           if (!item.href) continue;
           const cleanHref = item.href.split('#')[0].replace(/^\//, '').toLowerCase();
-          flatToc.push({ title: item.label, href: cleanHref });
-          if (item.subitems) flattenToc(item.subitems);
+          flatToc.push({ title: item.label, href: cleanHref, level, originalHref: item.href });
+          if (item.subitems) flattenToc(item.subitems, level + 1);
         }
       };
       if (epubToc && epubToc.toc) flattenToc(epubToc.toc);
@@ -156,7 +156,7 @@ export const parseEpub = async (file: File): Promise<DocStructure> => {
           /(<img\b[^>]*?\s)src=(['"])([^'"]+)\2/gi,
           (_m: string, tagPre: string, quote: string, srcVal: string) => {
             const resolved = resolveSrc(srcVal);
-            return resolved ? `${tagPre}src=${quote}${resolved}${quote}` : _m;
+            return resolved ? `${tagPre}src=${quote}${resolved}${quote} data-orig-src=${quote}${srcVal}${quote}` : _m;
           }
         );
         // SVG <image> 태그의 xlink:href / href 치환
@@ -165,7 +165,7 @@ export const parseEpub = async (file: File): Promise<DocStructure> => {
           (_m: string, tagPre: string, quote: string, srcVal: string) => {
             const resolved = resolveSrc(srcVal);
             return resolved
-              ? `${tagPre}xlink:href=${quote}${resolved}${quote} href=${quote}${resolved}${quote}`
+              ? `${tagPre}xlink:href=${quote}${resolved}${quote} href=${quote}${resolved}${quote} data-orig-href=${quote}${srcVal}${quote}`
               : _m;
           }
         );
@@ -201,7 +201,7 @@ export const parseEpub = async (file: File): Promise<DocStructure> => {
           title: epubMeta.title,
           author: epubMeta.creator,
           cover: coverUrl || undefined,
-          toc: epubToc.toc.map((t: any) => ({ title: t.label, href: t.href, level: 0 }))
+          toc: flatToc.map(t => ({ title: t.title, href: t.originalHref, level: t.level }))
         }
       });
     } catch (error) {

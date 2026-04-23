@@ -329,92 +329,52 @@ const App: React.FC = () => {
         mimeType = "application/epub+zip";
         const zip = await JSZip.loadAsync(file);
 
-        // Data URL → 이진 이미지 파일로 추출하여 ZIP에 저장 (파일 크기 최적화)
-        // imageDataMap: dataUrl → epub 내 상대경로 (e.g. "../Images/img001.jpeg")
-        const imageDataMap = new Map<string, string>();
-        let imgFileIdx = 0;
-
-        // 이미지 폴더 결정: 원본 ZIP에서 이미지 파일 경로 패턴 찾기
-        let imgFolderPrefix = 'OEBPS/Images/';
-        for (const p of Object.keys(zip.files)) {
-          if (p.match(/\.(png|jpe?g|gif|webp)$/i) && !zip.files[p].dir) {
-            imgFolderPrefix = p.replace(/[^/]+$/, '');
-            break;
-          }
-        }
-
-        const dataUrlToMime: Record<string, string> = {
-          'png': 'image/png', 'jpeg': 'image/jpeg', 'jpg': 'image/jpeg',
-          'gif': 'image/gif', 'webp': 'image/webp', 'svg': 'image/svg+xml'
-        };
-
-        /**
-         * 챕터 HTML에서 Data URL을 추출하여 ZIP 이미지 파일로 저장하고,
-         * HTML 내 src를 상대경로로 교체한 뒤 반환합니다.
-         */
-        const processChapterHtml = async (html: string, chapPath: string): Promise<string> => {
-          // 챕터 경로의 디렉터리 (XHTML 상대경로 계산 기준)
-          const chapDir = chapPath.replace(/[^/]+$/, '');
-
-          return html.replace(
-            /src="(data:image\/([\w+]+);base64,([^"]+))"/gi,
-            (_match: string, dataUrl: string, ext: string, b64: string) => {
-              if (imageDataMap.has(dataUrl)) {
-                const relPath = imageDataMap.get(dataUrl)!;
-                return `src="${relPath}"`;
-              }
-
-              const safeExt = ext === 'svg+xml' ? 'svg' : ext.toLowerCase();
-              const fileName = `translated_img_${String(imgFileIdx++).padStart(4, '0')}.${safeExt}`;
-              const fullZipPath = `${imgFolderPrefix}${fileName}`;
-
-              // base64 → Uint8Array → ZIP에 저장
-              try {
-                const binaryStr = atob(b64);
-                const bytes = new Uint8Array(binaryStr.length);
-                for (let k = 0; k < binaryStr.length; k++) bytes[k] = binaryStr.charCodeAt(k);
-                zip.file(fullZipPath, bytes, { binary: true });
-
-                // content.opf manifest에 추가하기 위해 기록
-                const mime = dataUrlToMime[safeExt] || 'image/jpeg';
-                const id = `trans-img-${imgFileIdx - 1}`;
-                // OPF에 미디어 추가 (나중에 처리)
-                epubManifestAdditions.push({ id, href: `${imgFolderPrefix.replace(/^OEBPS\//, '')}${fileName}`, mime });
-              } catch (_e) {
-                // base64 디코딩 실패 → 빈 src
-              }
-
-              // 챕터 파일에서 이미지로의 상대경로 계산
-              const relPath = fullZipPath.replace(chapDir, '');
-              imageDataMap.set(dataUrl, relPath);
-              return `src="${relPath}"`;
-            }
-          );
-        };
-
-        const epubManifestAdditions: { id: string; href: string; mime: string }[] = [];
-
+        // 번역된 챕터(본문 교체) 및 이미지 경로 복구
         for (const chap of translatedStructure.chapters) {
           const possiblePaths = [chap.id, `OEBPS/${chap.id}`, `OPS/${chap.id}`, chap.id.replace(/^\//, '')];
           for (const p of possiblePaths) {
             if (zip.file(p)) {
-              const processedHtml = await processChapterHtml(chap.content, p);
-              zip.file(p, processedHtml);
-              break;
-            }
-          }
-        }
+              const originalContent = await zip.file(p)!.async('string');
+              
+              let newBodyContent = chap.content;
+              newBodyContent = newBodyContent.replace(
+                /<img\b([^>]*)>/gi,
+                (match) => {
+                  const origSrcMatch = match.match(/data-orig-src=(['"])(.*?)\1/i);
+                  if (origSrcMatch) {
+                    const origSrc = origSrcMatch[2];
+                    let ms = match.replace(/src=['"][^'"]*['"]/i, `src="${origSrc}"`);
+                    ms = ms.replace(/\s*data-orig-src=['"][^'"]*['"]/i, '');
+                    return ms;
+                  }
+                  return match;
+                }
+              );
+              newBodyContent = newBodyContent.replace(
+                /<image\b([^>]*)>/gi,
+                (match) => {
+                  const origHrefMatch = match.match(/data-orig-href=(['"])(.*?)\1/i);
+                  if (origHrefMatch) {
+                    const origHref = origHrefMatch[2];
+                    let ms = match.replace(/(?:xlink:)?href=['"][^'"]*['"]/gi, (m) => {
+                      return m.startsWith('xlink:') ? `xlink:href="${origHref}"` : `href="${origHref}"`;
+                    });
+                    ms = ms.replace(/\s*data-orig-href=['"][^'"]*['"]/i, '');
+                    return ms;
+                  }
+                  return match;
+                }
+              );
 
-        // content.opf에 새 이미지 항목 추가
-        if (epubManifestAdditions.length > 0) {
-          for (const opfPath of Object.keys(zip.files)) {
-            if (opfPath.endsWith('.opf')) {
-              const opfContent = await zip.file(opfPath)!.async('string');
-              const additions = epubManifestAdditions
-                .map(({ id, href, mime }) => `<item id="${id}" href="${href}" media-type="${mime}"/>`)
-                .join('\n  ');
-              const updated = opfContent.replace('<manifest>', `<manifest>\n  ${additions}`);
-              zip.file(opfPath, updated);
+              // 원본 XHTML/HTML의 body 내부만 치환 (기존 구조 완벽 보존)
+              const processedHtml = originalContent.replace(
+                /<body([^>]*)>([\s\S]*?)<\/body>/i,
+                (_match, bodyAttrs) => {
+                  return `<body${bodyAttrs}>\n${newBodyContent}\n</body>`;
+                }
+              );
+
+              zip.file(p, processedHtml);
               break;
             }
           }
@@ -432,22 +392,50 @@ const App: React.FC = () => {
               let modified = false;
 
               if (lowerName.endsWith('.ncx')) {
-                for (const item of translatedStructure.metadata.toc) {
-                  const itemBasename = item.href.split('/').pop()?.split('#')[0];
-                  const regex = new RegExp(`(<navPoint[^>]*src="[^"]*${itemBasename}[^"]*"[^>]*>[\\s\\S]*?<text>)([\\s\\S]*?)(</text>)`, 'gi');
-                  if (regex.test(content)) {
-                    content = content.replace(regex, `$1${item.title}$3`);
-                    modified = true;
+                const xmlDoc = new DOMParser().parseFromString(content, 'application/xml');
+                const navPoints = xmlDoc.getElementsByTagName('navPoint');
+                Array.from(navPoints).forEach(navPoint => {
+                  const contentNode = navPoint.getElementsByTagName('content')[0];
+                  if (contentNode) {
+                    const src = contentNode.getAttribute('src');
+                    if (src) {
+                      for (const item of translatedStructure.metadata.toc!) {
+                        const itemBasename = item.href.split('/').pop()?.split('#')[0];
+                        if (itemBasename && src.includes(itemBasename)) {
+                          const textNode = navPoint.getElementsByTagName('text')[0];
+                          if (textNode) {
+                            textNode.textContent = item.title;
+                            modified = true;
+                          }
+                          break;
+                        }
+                      }
+                    }
                   }
-                }
+                });
+                if (modified) content = new XMLSerializer().serializeToString(xmlDoc);
+
               } else if (content.includes('<nav') || content.includes('epub:type="toc"')) {
-                for (const item of translatedStructure.metadata.toc) {
-                  const itemBasename = item.href.split('/').pop()?.split('#')[0];
-                  const regex = new RegExp(`(<a[^>]*href="[^"]*${itemBasename}[^"]*"[^>]*>)([\\s\\S]*?)(</a>)`, 'gi');
-                  if (regex.test(content)) {
-                    content = content.replace(regex, `$1${item.title}$3`);
-                    modified = true;
+                const xmlDoc = new DOMParser().parseFromString(content, 'application/xml');
+                const isError = xmlDoc.getElementsByTagName("parsererror").length > 0;
+                const docToUse = isError ? new DOMParser().parseFromString(content, 'text/html') : xmlDoc;
+                
+                const links = docToUse.getElementsByTagName('a');
+                Array.from(links).forEach(a => {
+                  const href = a.getAttribute('href');
+                  if (href) {
+                    for (const item of translatedStructure.metadata.toc!) {
+                      const itemBasename = item.href.split('/').pop()?.split('#')[0];
+                      if (itemBasename && href.includes(itemBasename)) {
+                        a.textContent = item.title;
+                        modified = true;
+                        break;
+                      }
+                    }
                   }
+                });
+                if (modified) {
+                  content = isError ? docToUse.documentElement.outerHTML : new XMLSerializer().serializeToString(docToUse);
                 }
               }
 
